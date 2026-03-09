@@ -39,7 +39,7 @@ class AssistantGUI:
         self.root = root
         self.root.title("Jarvis")
         self.root.configure(bg="#1a1a2e")
-        self.root.geometry("800x600")
+        self.root.geometry("800x700")
         self.root.attributes("-topmost", True)
 
         self.state = "loading"  # loading, idle, listening, processing, speaking
@@ -92,6 +92,37 @@ class AssistantGUI:
         )
         self.state_label.pack()
 
+        # weather display below circle
+        weather_frame = tk.Frame(left, bg="#1a1a2e")
+        weather_frame.pack(pady=(15, 0), fill="x")
+
+        self.weather_canvas = tk.Canvas(weather_frame, width=70, height=70, bg="#1a1a2e", highlightthickness=0)
+        self.weather_canvas.pack()
+
+        self.weather_temp = tk.Label(
+            weather_frame, text="", font=("Helvetica", 16, "bold"),
+            fg="#e0e0e0", bg="#1a1a2e"
+        )
+        self.weather_temp.pack()
+
+        self.weather_desc = tk.Label(
+            weather_frame, text="", font=("Helvetica", 10),
+            fg="#888888", bg="#1a1a2e"
+        )
+        self.weather_desc.pack()
+
+        self.weather_sun = tk.Label(
+            weather_frame, text="", font=("Helvetica", 9),
+            fg="#cc8844", bg="#1a1a2e"
+        )
+        self.weather_sun.pack()
+
+        self.weather_updated = tk.Label(
+            weather_frame, text="", font=("Helvetica", 8),
+            fg="#555555", bg="#1a1a2e"
+        )
+        self.weather_updated.pack(pady=(3, 0))
+
         # right: timers
         right = tk.Frame(mid, bg="#1a1a2e")
         right.pack(side="left", fill="both", expand=True)
@@ -139,6 +170,95 @@ class AssistantGUI:
         self.log_text.tag_configure("ai", foreground="#ffaa44")
         self.log_text.tag_configure("jarvis", foreground="#cc88ff")
         self.log_text.tag_configure("error", foreground="#ff4444")
+
+    def _get_weather_type(self, condition):
+        condition = condition.lower().strip()
+        for key in ["sunny", "clear"]:
+            if key in condition:
+                return "sun"
+        if "partly" in condition:
+            return "partly"
+        for key in ["thunder", "storm"]:
+            if key in condition:
+                return "thunder"
+        for key in ["rain", "drizzle", "shower"]:
+            if key in condition:
+                return "rain"
+        for key in ["snow", "blizzard", "sleet"]:
+            if key in condition:
+                return "snow"
+        for key in ["fog", "mist", "haze"]:
+            if key in condition:
+                return "fog"
+        for key in ["cloud", "overcast"]:
+            if key in condition:
+                return "cloud"
+        return "cloud"
+
+    def _draw_weather_icon(self, wtype):
+        c = self.weather_canvas
+        c.delete("all")
+        if wtype == "sun":
+            # yellow sun circle with rays
+            c.create_oval(20, 20, 50, 50, fill="#ffcc00", outline="#ffaa00", width=2)
+            for angle in range(0, 360, 45):
+                import math
+                rad = math.radians(angle)
+                x1 = 35 + 20 * math.cos(rad)
+                y1 = 35 + 20 * math.sin(rad)
+                x2 = 35 + 28 * math.cos(rad)
+                y2 = 35 + 28 * math.sin(rad)
+                c.create_line(x1, y1, x2, y2, fill="#ffcc00", width=2)
+        elif wtype == "partly":
+            # small sun behind cloud
+            c.create_oval(10, 10, 35, 35, fill="#ffcc00", outline="#ffaa00", width=1)
+            c.create_oval(20, 25, 45, 50, fill="#cccccc", outline="#aaaaaa", width=1)
+            c.create_oval(30, 20, 60, 50, fill="#cccccc", outline="#aaaaaa", width=1)
+            c.create_oval(15, 30, 50, 55, fill="#cccccc", outline="#aaaaaa", width=1)
+        elif wtype == "cloud":
+            c.create_oval(10, 20, 35, 45, fill="#888888", outline="#777777", width=1)
+            c.create_oval(25, 10, 55, 45, fill="#999999", outline="#888888", width=1)
+            c.create_oval(15, 30, 50, 55, fill="#888888", outline="#777777", width=1)
+        elif wtype == "rain":
+            # cloud with rain drops
+            c.create_oval(10, 10, 35, 35, fill="#666688", outline="#555577", width=1)
+            c.create_oval(25, 5, 55, 35, fill="#777799", outline="#666688", width=1)
+            c.create_oval(15, 15, 50, 40, fill="#666688", outline="#555577", width=1)
+            for x in [20, 30, 40]:
+                c.create_line(x, 42, x - 3, 55, fill="#4488ff", width=2)
+                c.create_line(x + 7, 45, x + 4, 58, fill="#4488ff", width=2)
+        elif wtype == "thunder":
+            c.create_oval(10, 5, 35, 30, fill="#555577", outline="#444466", width=1)
+            c.create_oval(25, 0, 55, 30, fill="#666688", outline="#555577", width=1)
+            c.create_oval(15, 10, 50, 35, fill="#555577", outline="#444466", width=1)
+            # lightning bolt
+            c.create_polygon(32, 30, 28, 45, 33, 45, 29, 62, 40, 40, 35, 40, 38, 30,
+                             fill="#ffdd00", outline="#ffaa00")
+        elif wtype == "snow":
+            c.create_oval(10, 10, 35, 35, fill="#8888aa", outline="#7777aa", width=1)
+            c.create_oval(25, 5, 55, 35, fill="#9999bb", outline="#8888aa", width=1)
+            c.create_oval(15, 15, 50, 40, fill="#8888aa", outline="#7777aa", width=1)
+            for x, y in [(20, 48), (30, 52), (40, 46), (25, 58), (35, 60)]:
+                c.create_text(x, y, text="*", fill="white", font=("Helvetica", 10, "bold"))
+        elif wtype == "fog":
+            for i, y in enumerate([15, 25, 35, 45, 55]):
+                w = 50 - i * 2
+                c.create_line(10, y, 10 + w, y, fill="#999999", width=3, dash=(6, 4))
+
+    def update_weather(self, wtype, temp, desc, sunrise="", sunset=""):
+        self._draw_weather_icon(wtype)
+        self.weather_temp.config(text=temp)
+        self.weather_desc.config(text=desc)
+        if sunrise and sunset:
+            # strip seconds from times like "06:30:00" -> "6:30 AM"
+            try:
+                from datetime import datetime
+                sr = datetime.strptime(sunrise.strip(), "%H:%M:%S").strftime("%-I:%M %p")
+                ss = datetime.strptime(sunset.strip(), "%H:%M:%S").strftime("%-I:%M %p")
+            except Exception:
+                sr, ss = sunrise.strip(), sunset.strip()
+            self.weather_sun.config(text=f"^ {sr}  v {ss}")
+        self.weather_updated.config(text=f"Updated {time.strftime('%I:%M %p')}")
 
     def _update_clock(self):
         self.clock_label.config(text=time.strftime("%I:%M:%S %p"))
@@ -290,6 +410,28 @@ class AssistantEngine:
         self._gui(self.gui.log, "Ready!", "jarvis")
         self.play_tone()
         self._gui(self.gui.set_state, "idle")
+        self._gui(self._weather_loop)
+
+    def _fetch_weather(self):
+        try:
+            result = subprocess.run(
+                ["curl", "-s", "wttr.in/Ocala+FL?format=%C|%t|%S|%s&u"],
+                capture_output=True, text=True, timeout=10
+            )
+            parts = result.stdout.strip().split("|")
+            if len(parts) >= 2:
+                condition = parts[0].strip()
+                temp = parts[1].strip().replace("+", "")
+                sunrise = parts[2].strip() if len(parts) > 2 else ""
+                sunset = parts[3].strip() if len(parts) > 3 else ""
+                wtype = self.gui._get_weather_type(condition)
+                self._gui(self.gui.update_weather, wtype, temp, condition, sunrise, sunset)
+        except Exception:
+            pass
+
+    def _weather_loop(self):
+        threading.Thread(target=self._fetch_weather, daemon=True).start()
+        self.gui.root.after(20 * 60 * 1000, self._weather_loop)
 
     def play_tone(self):
         subprocess.run(
@@ -401,7 +543,8 @@ RULES:
                 "model": "gemma2:2b", "prompt": text,
                 "system": system, "stream": False,
                 "format": "json", "context": [],
-                "options": {"temperature": 0.1, "num_predict": 60}
+                "options": {"temperature": 0.1, "num_predict": 60},
+                "keep_alive": 0
             }, timeout=60)
             result = r.json().get("response", "").strip()
             return json.loads(result), result
@@ -479,8 +622,32 @@ RULES:
             num = find_number_before(text, unit_match.start())
             if num is not None:
                 unit = unit_match.group(1).rstrip("s")
-                total += num * multiplier.get(unit, 1)
+                base = multiplier.get(unit, 1)
+                total += num * base
                 found = True
+                # check for "and a half" after the unit
+                after = text[unit_match.end():].strip()
+                if after.startswith("and a half") or after.startswith("and half"):
+                    total += base // 2
+            else:
+                # check for "half" before unit: "half a minute"
+                before = text[:unit_match.start()].strip()
+                if before.endswith("half a") or before.endswith("half"):
+                    unit = unit_match.group(1).rstrip("s")
+                    total += multiplier.get(unit, 1) // 2
+                    found = True
+
+        # handle "X and a half minutes" where "and a half" comes before unit
+        half_match = re.search(r'(\d+|' + '|'.join(sorted(word_to_num.keys(), key=lambda x: -len(x))) + r')\s+and\s+a\s+half\s+(seconds?|minutes?|hours?)', text)
+        if half_match and not found:
+            num_str = half_match.group(1)
+            num = int(num_str) if num_str.isdigit() else word_to_num.get(num_str)
+            unit = half_match.group(2).rstrip("s")
+            if num is not None:
+                base = multiplier.get(unit, 1)
+                total = num * base + base // 2
+                found = True
+
         return total if found else None
 
     def amount_to_seconds(self, amount, unit):
@@ -648,7 +815,7 @@ RULES:
         elif action == "weather":
             try:
                 result = subprocess.run(
-                    ["curl", "-s", "wttr.in/?format=%C,+%t,+%h+humidity,+wind+%w"],
+                    ["curl", "-s", "wttr.in/Ocala+FL?format=%C,+%t,+%h+humidity,+wind+%w&u"],
                     capture_output=True, text=True, timeout=5
                 )
                 weather = result.stdout.strip()
