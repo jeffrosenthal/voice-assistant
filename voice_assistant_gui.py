@@ -28,6 +28,9 @@ MIC_GAIN = 20
 VOICE_MODEL = "/home/mint/voices/en_US-amy-medium.onnx"
 OLLAMA_URL = "http://localhost:11434/api/generate"
 
+TV_IP = "192.168.1.150:7345"
+TV_AUTH = "Z8lq39gk31"
+
 
 # -----------------------------
 # GUI
@@ -45,6 +48,9 @@ class AssistantGUI:
         self.state = "loading"  # loading, idle, listening, processing, speaking
         self.prompt_count = 0
         self.on_timer_done = None  # callback when timer finishes
+        self.on_tv_toggle = None   # callback for TV power button
+        self.on_tv_vol = None      # callback for volume buttons
+        self.on_mic_toggle = None  # callback for mic mute button
 
         self._build_ui()
         self._update_clock()
@@ -72,6 +78,15 @@ class AssistantGUI:
             fg="#666666", bg="#1a1a2e"
         )
         self.status_text.pack(side="right")
+
+        self.mic_muted = False
+        self.mic_btn = tk.Button(
+            top, text="MIC ON", font=("Helvetica", 10, "bold"),
+            bg="#1a4a1a", fg="#44cc44", activebackground="#2a6a2a",
+            relief="flat", padx=8, pady=4,
+            command=self._toggle_mic
+        )
+        self.mic_btn.pack(side="right", padx=(0, 10))
 
         # middle area
         mid = tk.Frame(self.root, bg="#1a1a2e")
@@ -144,6 +159,35 @@ class AssistantGUI:
 
         self.timer_widgets = {}
 
+        # TV controls row
+        tv_row = tk.Frame(right, bg="#1a1a2e")
+        tv_row.pack(fill="x", pady=(10, 0))
+
+        tk.Label(tv_row, text="TV", font=("Helvetica", 12, "bold"),
+                 fg="#666666", bg="#1a1a2e").pack(side="left", padx=(0, 10))
+
+        self.tv_btn = tk.Canvas(tv_row, width=50, height=30, bg="#1a1a2e", highlightthickness=0, cursor="hand2")
+        self.tv_btn.pack(side="left")
+        self.tv_power_on = False
+        self._draw_tv_btn()
+        self.tv_btn.bind("<Button-1>", self._on_tv_btn_click)
+
+        self.tv_status = tk.Label(tv_row, text="OFF", font=("Helvetica", 9),
+                                  fg="#555555", bg="#1a1a2e")
+        self.tv_status.pack(side="left", padx=(5, 15))
+
+        tk.Button(tv_row, text="VOL-", font=("Helvetica", 9, "bold"),
+                  bg="#222244", fg="#aaaacc", activebackground="#333366",
+                  relief="flat", padx=6, pady=3,
+                  command=lambda: self.on_tv_vol and self.on_tv_vol("down")
+                  ).pack(side="left", padx=2)
+
+        tk.Button(tv_row, text="VOL+", font=("Helvetica", 9, "bold"),
+                  bg="#222244", fg="#aaaacc", activebackground="#333366",
+                  relief="flat", padx=6, pady=3,
+                  command=lambda: self.on_tv_vol and self.on_tv_vol("up")
+                  ).pack(side="left", padx=2)
+
         # bottom: transcript log
         bot = tk.Frame(self.root, bg="#1a1a2e")
         bot.pack(fill="x", padx=20, pady=(5, 15))
@@ -170,6 +214,37 @@ class AssistantGUI:
         self.log_text.tag_configure("ai", foreground="#ffaa44")
         self.log_text.tag_configure("jarvis", foreground="#cc88ff")
         self.log_text.tag_configure("error", foreground="#ff4444")
+
+    def _toggle_mic(self):
+        self.mic_muted = not self.mic_muted
+        if self.mic_muted:
+            self.mic_btn.config(text="MIC OFF", bg="#4a1a1a", fg="#cc4444", activebackground="#6a2a2a")
+        else:
+            self.mic_btn.config(text="MIC ON", bg="#1a4a1a", fg="#44cc44", activebackground="#2a6a2a")
+        if self.on_mic_toggle:
+            self.on_mic_toggle(self.mic_muted)
+
+    def _draw_tv_btn(self):
+        c = self.tv_btn
+        c.delete("all")
+        if self.tv_power_on:
+            c.create_rectangle(2, 2, 48, 28, fill="#00cc44", outline="#00ff66", width=2)
+            c.create_text(25, 15, text="ON", fill="white", font=("Helvetica", 10, "bold"))
+        else:
+            c.create_rectangle(2, 2, 48, 28, fill="#331111", outline="#444444", width=2)
+            c.create_text(25, 15, text="OFF", fill="#555555", font=("Helvetica", 10, "bold"))
+
+    def _on_tv_btn_click(self, event):
+        if self.on_tv_toggle:
+            self.on_tv_toggle()
+
+    def set_tv_state(self, is_on):
+        self.tv_power_on = is_on
+        self._draw_tv_btn()
+        self.tv_status.config(
+            text="ON" if is_on else "OFF",
+            fg="#00cc44" if is_on else "#555555"
+        )
 
     def _get_weather_type(self, condition):
         condition = condition.lower().strip()
@@ -378,6 +453,9 @@ class AssistantEngine:
     def __init__(self, gui):
         self.gui = gui
         self.gui.on_timer_done = self._on_timer_done
+        self.gui.on_tv_toggle = self._tv_toggle
+        self.gui.on_tv_vol = self._tv_vol
+        self.gui.on_mic_toggle = self._on_mic_toggle
         self.wake_triggered = False
         self.last_wake_time = 0
         self.stream = None
@@ -385,6 +463,8 @@ class AssistantEngine:
         self.active_timers = {}
         self.busy = False
         self.prompt_num = 0
+        self.mic_muted = False
+        self.tv_on = False
 
     def _on_timer_done(self, num):
         if num in self.active_timers:
@@ -522,6 +602,12 @@ Search google: {"action":"search","query":"best pizza near me"}
 Get time: {"action":"time"}
 Get date: {"action":"date"}
 Get weather: {"action":"weather"}
+TV on: {"action":"tv","command":"on"}
+TV off: {"action":"tv","command":"off"}
+TV volume up: {"action":"tv","command":"volume_up","amount":5}
+TV volume down: {"action":"tv","command":"volume_down","amount":5}
+TV mute: {"action":"tv","command":"mute"}
+TV unmute: {"action":"tv","command":"unmute"}
 General question: {"action":"question"}
 
 RULES:
@@ -826,6 +912,9 @@ RULES:
             except Exception:
                 self.speak("I could not get the weather")
 
+        elif action == "tv":
+            self.handle_tv(cmd)
+
         elif action == "question":
             self._gui(self.gui.set_state, "thinking")
             answer = self.ollama_answer(text)
@@ -838,9 +927,68 @@ RULES:
             self.speak(answer)
             self._gui(self.gui.log_jarvis, answer)
 
+    # --- mic mute ---
+
+    def _on_mic_toggle(self, muted):
+        self.mic_muted = muted
+
+    # --- TV control ---
+
+    def _tv_toggle(self):
+        threading.Thread(target=self._tv_toggle_worker, daemon=True).start()
+
+    def _tv_toggle_worker(self):
+        command = "off" if self.tv_on else "on"
+        self.handle_tv({"command": command})
+
+    def _tv_vol(self, direction):
+        threading.Thread(target=lambda: self.handle_tv({"command": f"volume_{direction}", "amount": 3}), daemon=True).start()
+
+    def handle_tv(self, cmd):
+        command = cmd.get("command", "")
+        amount = int(cmd.get("amount", 5))
+
+        def run(*args):
+            return subprocess.run(
+                ["pyvizio", f"--ip={TV_IP}", f"--auth={TV_AUTH}", "--device_type=tv"] + list(args),
+                capture_output=True, text=True
+            )
+
+        try:
+            if command == "on":
+                run("power", "on")
+                self.tv_on = True
+                self._gui(self.gui.set_tv_state, True)
+                self.speak("Turning TV on")
+            elif command == "off":
+                run("power", "off")
+                self.tv_on = False
+                self._gui(self.gui.set_tv_state, False)
+                self.speak("Turning TV off")
+            elif command == "volume_up":
+                run("volume", "up", str(amount))
+                self.speak("Volume up")
+            elif command == "volume_down":
+                run("volume", "down", str(amount))
+                self.speak("Volume down")
+            elif command == "mute":
+                run("mute", "on")
+                self.speak("TV muted")
+            elif command == "unmute":
+                run("mute", "off")
+                self.speak("TV unmuted")
+            else:
+                self.speak("I don't know that TV command")
+            self._gui(self.gui.log_jarvis, f"TV: {command}")
+        except Exception as e:
+            self.speak("Could not reach the TV")
+            self._gui(self.gui.log, f"TV error: {e}", "error")
+
     # --- wake word ---
 
     def wake_callback(self, indata, frames, time_info, status):
+        if self.mic_muted:
+            return
         audio = indata[:, 0]
         audio = audio * MIC_GAIN
         audio = resample(audio, int(len(audio) / 3))
