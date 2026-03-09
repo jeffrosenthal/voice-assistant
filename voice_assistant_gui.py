@@ -100,6 +100,8 @@ class AssistantGUI:
         self.canvas = tk.Canvas(left, width=160, height=160, bg="#1a1a2e", highlightthickness=0)
         self.canvas.pack(pady=(20, 10))
         self.circle = self.canvas.create_oval(10, 10, 150, 150, fill="#333355", outline="#444477", width=3)
+        self.audio_level = 0.0  # updated by engine
+        self._animate_circle()
 
         self.state_label = tk.Label(
             left, text="Loading...", font=("Helvetica", 12),
@@ -188,6 +190,10 @@ class AssistantGUI:
                   command=lambda: self.on_tv_vol and self.on_tv_vol("up")
                   ).pack(side="left", padx=2)
 
+        self.tv_vol_label = tk.Label(tv_row, text="", font=("Helvetica", 9),
+                                     fg="#aaaacc", bg="#1a1a2e")
+        self.tv_vol_label.pack(side="left", padx=(8, 0))
+
         # bottom: transcript log
         bot = tk.Frame(self.root, bg="#1a1a2e")
         bot.pack(fill="x", padx=20, pady=(5, 15))
@@ -237,6 +243,9 @@ class AssistantGUI:
     def _on_tv_btn_click(self, event):
         if self.on_tv_toggle:
             self.on_tv_toggle()
+
+    def set_tv_volume(self, level):
+        self.tv_vol_label.config(text=f"Vol {level}")
 
     def set_tv_state(self, is_on):
         self.tv_power_on = is_on
@@ -339,6 +348,19 @@ class AssistantGUI:
         self.clock_label.config(text=time.strftime("%I:%M:%S %p"))
         self.date_label.config(text=time.strftime("%A, %B %d, %Y"))
         self.root.after(1000, self._update_clock)
+
+    def _animate_circle(self):
+        # pulse size based on audio level (idle/listening only)
+        if self.state in ("idle", "listening", "wake"):
+            level = min(self.audio_level, 1.0)
+            # base radius 65, max expand 20px
+            expand = int(level * 20)
+            cx, cy = 80, 80
+            r = 65 + expand
+            self.canvas.coords(self.circle, cx - r, cy - r, cx + r, cy + r)
+        else:
+            self.canvas.coords(self.circle, 10, 10, 150, 150)
+        self.root.after(50, self._animate_circle)
 
     def set_state(self, state):
         self.state = state
@@ -491,6 +513,11 @@ class AssistantEngine:
         self.play_tone()
         self._gui(self.gui.set_state, "idle")
         self._gui(self._weather_loop)
+        # sync TV button with actual state
+        tv_state = self._tv_get_state()
+        self.tv_on = tv_state
+        self._gui(self.gui.set_tv_state, tv_state)
+        self._update_tv_volume()
 
     def _fetch_weather(self):
         try:
@@ -562,6 +589,7 @@ class AssistantEngine:
                     continue
 
                 level = np.mean(np.abs(data))
+                self.gui.audio_level = min(float(level * MIC_GAIN * 5), 1.0)
                 if level > 0.002:
                     heard_speech = True
                     silent_chunks = 0
@@ -606,6 +634,7 @@ TV on: {"action":"tv","command":"on"}
 TV off: {"action":"tv","command":"off"}
 TV volume up: {"action":"tv","command":"volume_up","amount":5}
 TV volume down: {"action":"tv","command":"volume_down","amount":5}
+Set TV volume to specific level: {"action":"tv","command":"volume_set","amount":50}
 TV mute: {"action":"tv","command":"mute"}
 TV unmute: {"action":"tv","command":"unmute"}
 General question: {"action":"question"}
@@ -937,14 +966,51 @@ RULES:
     def _tv_toggle(self):
         threading.Thread(target=self._tv_toggle_worker, daemon=True).start()
 
+    def _get_tv_volume(self):
+        try:
+            result = subprocess.run(
+                ["pyvizio", f"--ip={TV_IP}", f"--auth={TV_AUTH}", "--device_type=tv", "get-volume-level"],
+                capture_output=True, text=True, timeout=10
+            )
+            output = result.stdout + result.stderr
+            import re
+            m = re.search(r'current volume[:\s]+(\d+)', output, re.IGNORECASE)
+            if m:
+                return int(m.group(1))
+        except Exception as e:
+            print(f"get_tv_volume error: {e}")
+        return None
+
+    def _update_tv_volume(self):
+        try:
+            level = self._get_tv_volume()
+            if level is not None:
+                self._gui(self.gui.set_tv_volume, str(level))
+        except Exception:
+            pass
+
+    def _tv_get_state(self):
+        """Query actual TV power state."""
+        try:
+            result = subprocess.run(
+                ["pyvizio", f"--ip={TV_IP}", f"--auth={TV_AUTH}", "--device_type=tv", "get-power-state"],
+                capture_output=True, text=True, timeout=5
+            )
+            output = result.stdout + result.stderr
+            return "is on" in output.lower()
+        except Exception:
+            return self.tv_on
+
     def _tv_toggle_worker(self):
-        command = "off" if self.tv_on else "on"
-        self.handle_tv({"command": command})
+        current = self._tv_get_state()
+        command = "off" if current else "on"
+        self.handle_tv({"command": command}, silent=True)
+        self._update_tv_volume()
 
     def _tv_vol(self, direction):
-        threading.Thread(target=lambda: self.handle_tv({"command": f"volume_{direction}", "amount": 3}), daemon=True).start()
+        threading.Thread(target=lambda: self.handle_tv({"command": f"volume_{direction}", "amount": 3}, silent=True), daemon=True).start()
 
-    def handle_tv(self, cmd):
+    def handle_tv(self, cmd, silent=False):
         command = cmd.get("command", "")
         amount = int(cmd.get("amount", 5))
 
@@ -959,26 +1025,41 @@ RULES:
                 run("power", "on")
                 self.tv_on = True
                 self._gui(self.gui.set_tv_state, True)
-                self.speak("Turning TV on")
+                if not silent: self.speak("Turning TV on")
             elif command == "off":
                 run("power", "off")
                 self.tv_on = False
                 self._gui(self.gui.set_tv_state, False)
-                self.speak("Turning TV off")
+                if not silent: self.speak("Turning TV off")
+            elif command == "volume_set":
+                current = self._get_tv_volume()
+                if current is None:
+                    if not silent: self.speak("Could not read TV volume")
+                else:
+                    diff = amount - current
+                    print(f"  Volume set: current={current} target={amount} diff={diff}")
+                    if diff > 0:
+                        run("volume", "up", str(diff))
+                    elif diff < 0:
+                        run("volume", "down", str(abs(diff)))
+                    if not silent: self.speak(f"Volume set to {amount}")
+                    self._update_tv_volume()
             elif command == "volume_up":
                 run("volume", "up", str(amount))
-                self.speak("Volume up")
+                if not silent: self.speak("Volume up")
+                self._update_tv_volume()
             elif command == "volume_down":
                 run("volume", "down", str(amount))
-                self.speak("Volume down")
+                if not silent: self.speak("Volume down")
+                self._update_tv_volume()
             elif command == "mute":
                 run("mute", "on")
-                self.speak("TV muted")
+                if not silent: self.speak("TV muted")
             elif command == "unmute":
                 run("mute", "off")
-                self.speak("TV unmuted")
+                if not silent: self.speak("TV unmuted")
             else:
-                self.speak("I don't know that TV command")
+                if not silent: self.speak("I don't know that TV command")
             self._gui(self.gui.log_jarvis, f"TV: {command}")
         except Exception as e:
             self.speak("Could not reach the TV")
@@ -990,6 +1071,11 @@ RULES:
         if self.mic_muted:
             return
         audio = indata[:, 0]
+
+        # update audio level for circle animation (normalized 0-1)
+        level = float(np.mean(np.abs(audio)) * MIC_GAIN * 5)
+        self.gui.audio_level = min(level, 1.0)
+
         audio = audio * MIC_GAIN
         audio = resample(audio, int(len(audio) / 3))
         audio_int16 = np.clip(audio * 32767, -32768, 32767).astype(np.int16)
@@ -1012,6 +1098,7 @@ RULES:
         self.stream.stop()
         self.stream.close()
         self.wake_model.reset()
+        self.gui.audio_level = 0.0
 
         self._gui(self.gui.set_state, "wake")
         time.sleep(0.3)
